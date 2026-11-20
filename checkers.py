@@ -149,60 +149,77 @@ class HCheckersMod(loader.Module):
                         board[r, c] = "b"
                     elif r > 4:
                         board[r, c] = "w"
-        self.games[chat] = {"board": board, "white": me, "black": opponent, "turn": "w", "chain": None}
-        await utils.answer(message, "✅ Игра началась!\n" + self._board(self.games[chat]))
+        self.games[chat] = {"board": board, "white": me, "black": opponent, "turn": "w", "chain": None, "selected": None}
+        game = self.games[chat]
+        form = await self.inline.form(
+            text=self._board(game),
+            message=message,
+            reply_markup=self._buttons(chat),
+            force_me=False,
+            always_allow=[opponent],
+            ttl=False,
+        )
+        if not form:
+            self.games.pop(chat, None)
+            await utils.answer(message, "❌ Inline-кнопки недоступны. Проверь inline-бот Hikka.")
+
+    def _apply_move(self, g, player, start, end):
+        if player not in (g["white"], g["black"]):
+            return "Ты не участвуешь."
+        if player != (g["white"] if g["turn"] == "w" else g["black"]):
+            return "Сейчас не твой ход."
+        board = g["board"]
+        piece = board.get(start)
+        if not piece or self._owner(piece) != g["turn"]:
+            return "Выбери свою шашку."
+        if g["chain"] is not None and start != g["chain"]:
+            return "Продолжи взятие этой же шашкой."
+        captures = self._captures(board, *start)
+        capture = next(((dst, victim) for dst, victim in captures if dst == end), None)
+        if not capture:
+            if self._any_captures(board, g["turn"]):
+                return "Взятие обязательно."
+            if end not in self._steps(board, *start):
+                return "Недопустимый ход."
+        board.pop(start)
+        if capture:
+            board.pop(capture[1])
+        if piece == "w" and end[0] == 0:
+            piece = "W"
+        elif piece == "b" and end[0] == 7:
+            piece = "B"
+        board[end] = piece
+        if capture and self._captures(board, *end):
+            g["chain"] = end
+            g["selected"] = end
+        else:
+            g["chain"] = None
+            g["selected"] = None
+            g["turn"] = "b" if g["turn"] == "w" else "w"
+        return None
+
+    def _finished(self, g):
+        return g["chain"] is None and not self._any_moves(g["board"], g["turn"])
 
     async def _move(self, message, arg):
-        g = self.games.get(message.chat_id)
-        if not g:
-            await utils.answer(message, "❌ Нет партии. Начни <code>.checkers</code> ответом на друга.")
-            return
-        player = getattr(message, "sender_id", None)
-        if player not in (g["white"], g["black"]):
-            return
-        if player != (g["white"] if g["turn"] == "w" else g["black"]):
-            await utils.answer(message, "⌛ Сейчас не твой ход.")
+        game = self.games.get(message.chat_id)
+        if not game:
+            await utils.answer(message, "❌ Нет партии, начни <code>.checkers</code> ответом на друга.")
             return
         match = re.fullmatch(r"([a-h][1-8])\s*[- ]\s*([a-h][1-8])", arg.strip().lower())
         if not match:
-            await utils.answer(message, "❌ Пример: <code>.dmove a3 b4</code>")
+            await utils.answer(message, "❌ Ход: <code>.dmove a3 b4</code>")
             return
         start, end = self._sq(match.group(1)), self._sq(match.group(2))
-        b = g["board"]
-        p = b.get(start)
-        if not p or self._owner(p) != g["turn"]:
-            await utils.answer(message, "❌ Тут нет твоей шашки.")
+        err = self._apply_move(game, getattr(message, "sender_id", None), start, end)
+        if err:
+            await utils.answer(message, "❌ " + err)
             return
-        if g["chain"] and start != g["chain"]:
-            await utils.answer(message, "❌ Нужно продолжить взятие шашкой <code>{}</code>".format(self._label(*g["chain"])))
-            return
-
-        captures = self._captures(b, *start)
-        forced = self._any_captures(b, g["turn"])
-        selected = next(((dest, victim) for dest, victim in captures if dest == end), None)
-        if not selected and (forced or end not in self._steps(b, *start)):
-            await utils.answer(message, "❌ Недопустимый ход. Взятие обязательно, если возможно.")
-            return
-        b.pop(start)
-        if selected:
-            b.pop(selected[1])
-        if p == "w" and end[0] == 0:
-            p = "W"
-        elif p == "b" and end[0] == 7:
-            p = "B"
-        b[end] = p
-        if selected and self._captures(b, *end):
-            g["chain"] = end
-        else:
-            g["chain"] = None
-            g["turn"] = "b" if g["turn"] == "w" else "w"
-
-        if not g["chain"] and not self._any_moves(b, g["turn"]):
-            winner = "белые ⚪" if g["turn"] == "b" else "чёрные ⚫"
-            out = self._board(g) + "\n🏆 Победили {}!".format(winner)
-            del self.games[message.chat_id]
-        else:
-            out = self._board(g)
+        finished = self._finished(game)
+        out = self._board(game)
+        if finished:
+            out += "\n🏆 Победили {}!".format("белые ⚪" if game["turn"] == "b" else "чёрные ⚫")
+            self.games.pop(message.chat_id, None)
         await utils.answer(message, out)
 
     async def dmovecmd(self, message):
@@ -222,3 +239,97 @@ class HCheckersMod(loader.Module):
                 await self._move(message, match.group(1))
         except Exception:
             return
+
+    def _available(self, game, pos):
+        board = game["board"]
+        piece = board.get(pos)
+        if not piece or self._owner(piece) != game["turn"]:
+            return []
+        if game["chain"] is not None and pos != game["chain"]:
+            return []
+        captures = self._captures(board, *pos)
+        if captures:
+            return [dst for dst, victim in captures]
+        if self._any_captures(board, game["turn"]):
+            return []
+        return self._steps(board, *pos)
+
+    def _buttons(self, chat):
+        game = self.games.get(chat)
+        if not game:
+            return [[{"text": "🏁 Завершено", "callback": self._click, "args": (chat, -1)}]]
+        selected = game.get("selected")
+        options = set(self._available(game, selected)) if selected is not None else set()
+        piece_icons = {"w": "⚪", "W": "♔", "b": "⚫", "B": "♚"}
+        rows = []
+        for r in range(8):
+            row = []
+            for c in range(8):
+                pos = (r, c)
+                piece = game["board"].get(pos)
+                label = piece_icons.get(piece, "▫" if (r + c) % 2 else "▪")
+                if pos == selected:
+                    label = "🔹"
+                elif pos in options:
+                    label = "🟢"
+                row.append({"text": label, "callback": self._click, "args": (chat, r * 8 + c)})
+            rows.append(row)
+        rows.append([{"text": "🏳️ Сдаться", "callback": self._resign, "args": (chat,)}])
+        return rows
+
+    async def _click(self, call, chat, square):
+        game = self.games.get(chat)
+        if not game:
+            await call.answer("Партия завершена.", show_alert=True)
+            return
+        player = call.from_user.id
+        if player not in (game["white"], game["black"]):
+            await call.answer("Ты не участвуешь в этой партии.", show_alert=True)
+            return
+        if player != (game["white"] if game["turn"] == "w" else game["black"]):
+            await call.answer("Сейчас ход соперника.")
+            return
+        if square < 0:
+            await call.answer("Партия завершена.")
+            return
+        pos = (square // 8, square % 8)
+        piece = game["board"].get(pos)
+        if piece and self._owner(piece) == game["turn"]:
+            if game["chain"] is not None and pos != game["chain"]:
+                await call.answer("Продолжи взятие той же шашкой.")
+                return
+            if not self._available(game, pos):
+                await call.answer("Выбери шашку с допустимым ходом.")
+                return
+            game["selected"] = pos if game.get("selected") != pos or game["chain"] is not None else None
+        elif game.get("selected") is not None:
+            err = self._apply_move(game, player, game["selected"], pos)
+            if err:
+                await call.answer(err)
+                return
+        else:
+            await call.answer("Сначала выбери свою шашку.")
+            return
+        done = self._finished(game)
+        output = self._board(game)
+        if done:
+            output += "\n🏆 Победили {}!".format("белые ⚪" if game["turn"] == "b" else "чёрные ⚫")
+        await call.edit(
+            text=output,
+            reply_markup=self._buttons(chat) if not done else [[{"text": "🏁 Партия завершена", "callback": self._click, "args": (chat, -1)}]],
+            force_me=False, always_allow=[game["black"]],
+        )
+        if done:
+            self.games.pop(chat, None)
+
+    async def _resign(self, call, chat):
+        game = self.games.get(chat)
+        if not game:
+            await call.answer("Партия завершена.")
+            return
+        if call.from_user.id not in (game["white"], game["black"]):
+            await call.answer("Ты не участник.", show_alert=True)
+            return
+        winner = "чёрные ⚫" if call.from_user.id == game["white"] else "белые ⚪"
+        self.games.pop(chat, None)
+        await call.edit("🏳️ Сдача. Победили " + winner, reply_markup=[])
