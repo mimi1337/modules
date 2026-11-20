@@ -124,7 +124,7 @@ class HChessMod(loader.Module):
             if message.chat_id not in self.games:
                 return
             text = getattr(message, "raw_text", "") or ""
-            match = re.fullmatch(r"\\.cmove\\s+([a-h][1-8][a-h][1-8][qrbn]?)\\s*", text, re.I)
+            match = re.fullmatch(r"\.cmove\s+([a-h][1-8][a-h][1-8][qrbn]?)\s*", text, re.I)
             if match:
                 await self._move(message, match.group(1))
         except Exception:
