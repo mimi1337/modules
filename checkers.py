@@ -163,7 +163,7 @@ class HCheckersMod(loader.Module):
         if player != (g["white"] if g["turn"] == "w" else g["black"]):
             await utils.answer(message, "⌛ Сейчас не твой ход.")
             return
-        match = re.fullmatch(r"([a-h][1-8])\\s*[- ]\\s*([a-h][1-8])", arg.strip().lower())
+        match = re.fullmatch(r"([a-h][1-8])\s*[- ]\s*([a-h][1-8])", arg.strip().lower())
         if not match:
             await utils.answer(message, "❌ Пример: <code>.dmove a3 b4</code>")
             return
@@ -217,7 +217,7 @@ class HCheckersMod(loader.Module):
             if message.chat_id not in self.games:
                 return
             raw = getattr(message, "raw_text", "") or ""
-            match = re.fullmatch(r"\\.dmove\\s+(.+)", raw.strip(), re.I)
+            match = re.fullmatch(r"\.dmove\s+(.+)", raw.strip(), re.I)
             if match:
                 await self._move(message, match.group(1))
         except Exception:
