@@ -75,7 +75,7 @@ class HChessMod(loader.Module):
             return
         reply = await message.get_reply_message()
         opponent = getattr(reply, "sender_id", None) if reply else None
-        me = (await self.client.get_me()).id
+        me = (await self._client.get_me()).id
         if not opponent or opponent == me:
             await utils.answer(message, "❌ Ответь командой <code>.chess</code> на сообщение друга.")
             return
